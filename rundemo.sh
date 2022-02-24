@@ -42,8 +42,6 @@ run "cat postgres-app.yaml"
 run "kubectl create -f postgres-app.yaml"
 watch kubectl get pods -l app=postgres -o wide
 
-#clear the screen
-clear
 
 desc ""
 desc "Now we'll run a Portworx command to see what the Portworx cluster reveals about the volume"
@@ -52,14 +50,14 @@ VOL=$(kubectl get pvc | grep px-postgres-pvc | awk '{print $3}')
 export VOL
 PX_POD=$(kubectl get pods -l name=portworx -n portworx -o jsonpath='{.items[0].metadata.name}')
 export PX_POD
-echo "$green pxctl volume list $VOL $reset"
+echo "$green pxctl volume inspect $VOL $reset"
 
 kubectl exec -i "$PX_POD" -n portworx -c portworx -- /opt/pwx/bin/pxctl volume inspect "${VOL}"
 
 run ""
 desc ""
 desc "We are going to exec into the Postgres pod and run a command to populate data, and then get the count"
-run "kubectl get pods -l app=postgres"
+run "kubectl get pods -l app=postgres -o wide"
 POD=$(kubectl get pods -l app=postgres | grep Running | grep 1/1 | awk '{print $1}')
 export POD
 desc "Our pod is called $POD"
@@ -73,7 +71,7 @@ EOF"
 
 desc ""
 desc "Populate the database with test data"
-run "kubectl exec -i $POD -- pgbench -i -s 50 pxdemo;"
+run "kubectl exec -i $POD -- pgbench -i -s 25 pxdemo;"
 
 desc ""
 desc "Get a count of the records"
@@ -85,7 +83,18 @@ EOF"
 
 
 desc ""
-desc "Now that we have 5,000,000 records in our running database, let's simulate a node failure"
+desc "Now we'll run a Portworx command to see what the current size of the volume is"
+VOL=$(kubectl get pvc | grep px-postgres-pvc | awk '{print $3}')
+export VOL
+PX_POD=$(kubectl get pods -l name=portworx -n portworx -o jsonpath='{.items[0].metadata.name}')
+export PX_POD
+echo "$green pxctl volume inspect $VOL $reset"
+
+kubectl exec -i "$PX_POD" -n portworx -c portworx -- /opt/pwx/bin/pxctl volume inspect "${VOL}"
+
+
+desc ""
+desc "Now that we have added records in our running database, let's simulate a node failure"
 desc "We will cordon the Kubernetes node, and kill the application, which will have to start on another node"
 export NODE=$(kubectl get pods -l app=postgres -o wide | grep -v NAME | awk '{print $7}')
 run "kubectl get pods -l app=postgres -o wide"
@@ -93,14 +102,11 @@ run "kubectl cordon ${NODE}"
 
 POD=$(kubectl get pods -l app=postgres -o wide | grep -v NAME | awk '{print $1}')
 run "kubectl delete pod ${POD}"
-watch kubectl get pods -l app=postgres -o wide
+
 
 desc ""
 desc "And let's uncordon that node so apps can run there again"
 run "kubectl uncordon ${NODE}"
-
-#clear the screen
-clear
 
 desc ""
 desc "What just happened? We created a database, added 5 million records to it, and simulated a node failure"
@@ -108,7 +114,7 @@ desc "Within seconds, it was running again on a second replica of the data on an
 desc " "
 desc "So lets validate the data"
 desc " "
-run "kubectl get pods -l app=postgres"
+run "kubectl get pods -l app=postgres -o wide"
 
 ##########
 # get count
@@ -125,8 +131,6 @@ select count(*) from pgbench_accounts;
 EOF"
 ##########
 
-#clear the screen
-clear
 
 desc ""
 desc "Now let's simulate an app failure due to lack of disk space"
@@ -134,7 +138,7 @@ desc "We'll add more records to the database, exceeding the original 1GiB volume
 desc ""
 desc "Next we will run further database record creation until we fill up the volume"
 
-run "kubectl exec -i $POD -- pgbench -c 10 -j 2 -t 10000 pxdemo"
+run "kubectl exec -i $POD -- pgbench -c 20 -j 4 -t 1000000 pxdemo"
 
 desc ""
 desc "The application crashed, citing lack of space. Let's fix that by patching the volume to a larger size, all from Kubernetes"
@@ -150,7 +154,7 @@ desc "What just happened? We extended the size of the volume."
 desc "Within seconds, the pod was running again with more space for data"
 desc " "
 desc "So now we can validate the data"
-run "kubectl get pods -l app=postgres"
+run "kubectl get pods -l app=postgres -o wide"
 
 desc ""
 desc "Let's get the count from the table"
@@ -172,8 +176,6 @@ EOF"
 ##########
 
 
-#clear the screen
-clear
 
 desc ""
 desc "Now let's simulate data loss due to human error, with recovery from a snapshot"
@@ -188,7 +190,7 @@ desc ""
 desc "Now we're going to go ahead and do something stupid because we're here to learn."
 desc ""
 
-run "kubectl get pods -l app=postgres"
+run "kubectl get pods -l app=postgres -o wide"
 POD=$(kubectl get pods -l app=postgres | grep Running | grep 1/1 | awk '{print $1}')
 export POD
 run "kubectl exec -i $POD -- psql << EOF
@@ -196,6 +198,22 @@ drop database pxdemo;
 \l
 \q
 EOF"
+
+
+##########
+# get count
+##########
+desc ""
+desc "Let's get the count from the database table"
+
+POD=$(kubectl get pods -l app=postgres | grep Running | grep 1/1 | awk '{print $1}')
+export POD
+run "kubectl exec -i $POD -- psql pxdemo<< EOF
+\dt
+select count(*) from pgbench_accounts;
+\q
+EOF"
+##########
 
 desc ""
 desc "Ok, so we deleted our database, what now? Restore your snapshot and carry on."
@@ -234,3 +252,8 @@ EOF"
 
 desc "The demo is complete! We have demonstrated recovery from failed nodes/pods, recovery from running out of capacity, and recovering of data from a snapshot after human error"
 
+sleep 10s
+
+desc "Cleaning up the demo resources and namespaces...."
+desc "Have a happy testing....."
+./cleanup.sh
